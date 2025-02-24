@@ -10,6 +10,8 @@ public class KeyListener : MonoBehaviour
         KeyCode.A,
         KeyCode.S,
         KeyCode.D,
+        KeyCode.LeftShift,
+        KeyCode.RightShift,
         KeyCode.UpArrow,
         KeyCode.LeftArrow,
         KeyCode.DownArrow,
