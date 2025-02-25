@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Events;
 
 internal enum RunDirection { Forward, Backward, Left, Right }
 
 public class PlayerController : MonoBehaviour
 {
-    // Time it takes for the player to no longer be able to jump (prevents accidents)
-    private const float MaxHangTime = 0.5f;
     // Time it takes to get to full speed
     private const float MovementChargeTime = 0.2f;
     // Maximum allowed jumps
@@ -21,7 +20,7 @@ public class PlayerController : MonoBehaviour
     
     [SerializeField] private float maxWalkSpeed = 1.0f;
     [SerializeField] private float jumpHeight = 10.0f;
-
+    
     private Dictionary<KeyCode,Action<bool>> _keyMappings;
     private Dictionary<RunDirection, bool> _activeMovement;
     private Dictionary<RunDirection, float> _activeMovementTime;
@@ -33,8 +32,11 @@ public class PlayerController : MonoBehaviour
     private Vector3 _dashDirection = Vector3.zero;
     private float _dashTime;
     private float _dashCooldown;
+    private float _prevDashCooldown;
     
-    private float _hangTime;
+    private readonly UnityEvent<float> _onDashCooldownChanged = new();
+    public void AddDashCooldownListener(UnityAction<float> call) => _onDashCooldownChanged.AddListener(call);
+    
     private bool _midair;
     private int _jumpCount;
     
@@ -95,25 +97,13 @@ public class PlayerController : MonoBehaviour
             _rb.rotation = Quaternion.LookRotation(new Vector3(mainCamera.transform.forward.x,0,mainCamera.transform.forward.z), Vector3.up);
         }
         
-        HandleAirTime();
         HandleDashing();
         HandleMovement();
     }
 
-    private void HandleAirTime()
-    {
-        if (_midair)
-        {
-            _hangTime += Time.deltaTime;
-        }
-        else
-        {
-            _hangTime = 0;
-        }
-    }
-
     private void HandleDashing()
     {
+        
         if (_isDashing)
         {
             _dashTime += Time.deltaTime;
@@ -122,10 +112,21 @@ public class PlayerController : MonoBehaviour
                 _isDashing = false;
             }
         }
-        if (_midair) return;
+
+        if (_midair)
+        {
+            _onDashCooldownChanged.Invoke(_dashCooldown);
+            _prevDashCooldown = _dashCooldown;
+            return;
+        }
         
         _dashCooldown -= Time.deltaTime;
         if (_dashCooldown < 0) _dashCooldown = 0;
+        
+        if (Math.Abs(_dashCooldown) - Math.Abs(_prevDashCooldown) <= 0) 
+            _onDashCooldownChanged.Invoke(_dashCooldown);
+        
+        _prevDashCooldown = _dashCooldown;
     }
 
     private void HandleMovement()
@@ -139,7 +140,6 @@ public class PlayerController : MonoBehaviour
             return;
         }
         
-        var dampen = _midair ? 0.2f : 1.0f; // Movement is less effective midair
         var directions = new Dictionary<RunDirection, Vector3>
         {
             [RunDirection.Forward] = transform.forward,
@@ -155,7 +155,7 @@ public class PlayerController : MonoBehaviour
             if (_activeMovement[direction])
             {
                 desiredVelocity += Utilities.CubicEaseIn(
-                    directions[direction] * (maxWalkSpeed * dampen), 
+                    directions[direction] * (maxWalkSpeed), 
                     Vector3.zero, 
                     Mathf.Clamp(_activeMovementTime[direction]/MovementChargeTime,0,1)
                 );
@@ -172,11 +172,11 @@ public class PlayerController : MonoBehaviour
         // Also, lock to maximum walking speed (side effect of dash feature)
         if (Mathf.Abs(desiredVelocity.x) < 0.01f)
         {
-            desiredVelocity.x = Mathf.Sign(prevVelocity.x) * Mathf.Min(Mathf.Abs(prevVelocity.x),maxWalkSpeed);
+            desiredVelocity.x = Mathf.Sign(prevVelocity.x) * Mathf.Min(Mathf.Abs(prevVelocity.x),maxWalkSpeed) / (_midair ? 1.01f : 1f);
         }
         if (Mathf.Abs(desiredVelocity.z) < 0.01f)
         {
-            desiredVelocity.z = Mathf.Sign(prevVelocity.z) * Mathf.Min(Mathf.Abs(prevVelocity.z),maxWalkSpeed);
+            desiredVelocity.z = Mathf.Sign(prevVelocity.z) * Mathf.Min(Mathf.Abs(prevVelocity.z),maxWalkSpeed) / (_midair ? 1.01f : 1f);
         }
         
         _rb.linearVelocity = new Vector3(desiredVelocity.x, prevVelocity.y, desiredVelocity.z);
@@ -197,9 +197,6 @@ public class PlayerController : MonoBehaviour
         if (!on) return;
         switch (_jumpCount)
         {
-            // If the player hasn't jumped yet and the 'hang time' is greater than the maximum buffer zone, cancel
-            case 0 when _hangTime > MaxHangTime:
-                return;
             // If player's jumped the allowed number of times (2), cancel
             case >= MaxJumpCount:
                 return;
@@ -210,15 +207,24 @@ public class PlayerController : MonoBehaviour
                 break;
         }
     }
-
+    
     private void OnCollisionEnter(Collision collision)
     {
-        if (collision.gameObject.CompareTag("Ground"))
+        if (collision.gameObject.CompareTag("Ground") && collision.transform.position.y < transform.position.y)
         {
             _midair = false;
             _jumpCount = 0;
             _dashCooldown = 0;
-        }
+        } 
+    }
+    
+    private void OnCollisionStay(Collision collision)
+    {
+        if (collision.gameObject.CompareTag("Ground") && collision.transform.position.y < transform.position.y)
+        {
+            _midair = false;
+            _jumpCount = 0;
+        } 
     }
 
     private void OnCollisionExit(Collision collision)
